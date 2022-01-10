@@ -11,9 +11,10 @@
 #define DIO 4 //D2
 TM1637Display display(CLK, DIO);
 
-#define NET_STAT_LED 10 //S3
-#define ATTEND_STAT_LED 9 //S2
-#define ERR_STAT_LED 16 //D0
+#define SEG_INTERVAL 5000
+
+#define SUCCESS_LED 16 //D0
+#define FAIL_LED 10 //S3
 
 #define PIEZO_PIN 15 //D8
 #define TONE_PITCH 930
@@ -25,13 +26,30 @@ MFRC522 rfid(SS_PIN, RST_PIN);
 #define WIFI_SSID "Xiaomi_1CF4"
 #define WIFI_PSK "9057353803"
 
+#define INTERNAL_SERVER_ERROR 500
+#define SERVICE_UNAVAILABLE 503
+
 String baseURL = "http://cbsh-api.herokuapp.com";
-String DEVICE_SERIAL = "DEVICE_0001";
+String DEVICE_SERIAL = "DEVICE_0000";
 
 String date = "";
 String securityWord = "";
 
+const uint8_t SEG_BLANK[] = {0x00, 0x00, 0x00, 0x00};
+const uint8_t SEG_LOAD[] = {
+  SEG_D,
+  SEG_E,
+  SEG_G,
+  SEG_C
+};
+
+uint8_t segData[] = {0x00, 0x00, 0x00, 0x00};
+
+unsigned long time_now = 0;
+bool segBusy = false;
+
 // SHA256 FUNCTIONS PART //////////
+
 char hex[256];
 uint8_t data[256];
 int start = 0;
@@ -209,82 +227,142 @@ String SHA256(String data)
   sha256_final(&ctx, hash);
   return(btoh(hex, hash, 32));
 }
+
+
+///////////////////////////////////////
 // SHA256 FUNCTIONS PART END //////////
+///////////////////////////////////////
 
-void setup() {
-  pinMode(NET_STAT_LED, OUTPUT);
-  digitalWrite(NET_STAT_LED, LOW);
-  
-  Serial.begin(9600);
-  SPI.begin();
-  rfid.PCD_Init();
+uint8_t encodeCharacter(char character) {
+  const uint8_t SEG_CHARACTER[] = {
+    SEG_A | SEG_B | SEG_C | SEG_E | SEG_F | SEG_G, //0, A
+    SEG_C | SEG_D | SEG_E | SEG_F | SEG_G, //1, b
+    SEG_D | SEG_E | SEG_G, //2, C
+    SEG_B | SEG_C | SEG_D | SEG_E | SEG_G, //3, d
+    SEG_A | SEG_D | SEG_E | SEG_F | SEG_G, //4, E
+    SEG_A | SEG_E | SEG_F | SEG_G, //5, F
+    SEG_A | SEG_B | SEG_C | SEG_D | SEG_F | SEG_G, //6, g
+    SEG_B | SEG_C | SEG_E | SEG_F | SEG_G, //7, H
+    SEG_E, //8, i
+    SEG_B | SEG_C | SEG_D, //9, J
+    SEG_D | SEG_E | SEG_F, //10, L
+    SEG_C | SEG_E | SEG_G, //11, n
+    SEG_C | SEG_D | SEG_E | SEG_G, //12, o
+    SEG_A | SEG_B | SEG_E | SEG_F | SEG_G, //13, P
+    SEG_A | SEG_B | SEG_C | SEG_F | SEG_G, //14, q
+    SEG_E | SEG_G, //15, r
+    SEG_A | SEG_C | SEG_D | SEG_F | SEG_G, //16, S
+    SEG_D | SEG_E | SEG_F | SEG_G, //17, t
+    SEG_C | SEG_D | SEG_E, //18, u
+    SEG_B | SEG_C | SEG_D | SEG_F | SEG_G, //19, y
+    SEG_D, //20, _
+    SEG_C | SEG_E | SEG_F | SEG_G, //21, h
+    SEG_A | SEG_D | SEG_E | SEG_F //22, C
+  };
 
-  display.setBrightness(0x0a);
-  display.showNumberDec(2586);
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PSK);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+  switch(character) {
+    case 'a':
+    case 'A':
+      return SEG_CHARACTER[0];
+    case 'b':
+    case 'B':
+      return SEG_CHARACTER[1];
+    case 'c':
+      return SEG_CHARACTER[2];
+    case 'C':
+      return SEG_CHARACTER[22];
+    case 'd':
+    case 'D':
+      return SEG_CHARACTER[3];
+    case 'e':
+    case 'E':
+      return SEG_CHARACTER[4];
+    case 'f':
+    case 'F':
+      return SEG_CHARACTER[5];
+    case 'g':
+    case 'G':
+      return SEG_CHARACTER[6];
+    case 'H':
+      return SEG_CHARACTER[7];
+    case 'i':
+    case 'I':
+      return SEG_CHARACTER[8];
+    case 'j':
+    case 'J':
+      return SEG_CHARACTER[9];
+    case 'l':
+    case 'L':
+      return SEG_CHARACTER[10];
+    case 'n':
+    case 'N':
+      return SEG_CHARACTER[11];
+    case 'o':
+    case 'O':
+      return SEG_CHARACTER[12];
+    case 'p':
+    case 'P':
+      return SEG_CHARACTER[13];
+    case 'q':
+    case 'Q':
+      return SEG_CHARACTER[14];
+    case 'r':
+    case 'R':
+      return SEG_CHARACTER[15];
+    case 's':
+    case 'S':
+      return SEG_CHARACTER[16];
+    case 't':
+    case 'T':
+      return SEG_CHARACTER[17];
+    case 'u':
+    case 'U':
+      return SEG_CHARACTER[18];
+    case 'y':
+    case 'Y':
+      return SEG_CHARACTER[19];
+    case '_':
+      return SEG_CHARACTER[20];
+    case 'h':
+      return SEG_CHARACTER[21];
+    case '0':
+      return display.encodeDigit(0);
+    case '1':
+      return display.encodeDigit(1);
+    case '2':
+      return display.encodeDigit(2);
+    case '3':
+      return display.encodeDigit(3);
+    case '4':
+      return display.encodeDigit(4);
+    case '5':
+      return display.encodeDigit(5);
+    case '6':
+      return display.encodeDigit(6);
+    case '7':
+      return display.encodeDigit(7);
+    case '8':
+      return display.encodeDigit(8);
+    case '9':
+      return display.encodeDigit(9);
+    default:
+      return 0x00;
   }
-  display.showNumberDec(1234);
-  updateDate();
-  updateSecurityWord();
-  Serial.println(date);
-  Serial.println(securityWord);
-}
+};
 
-void loop() {
-
-   if (WiFi.status() == WL_CONNECTED) {
-    digitalWrite(NET_STAT_LED, HIGH);
-   } else {
-    digitalWrite(NET_STAT_LED, LOW);
-   }
-  
-  //Look for new cards
-  if(!rfid.PICC_IsNewCardPresent()){
-    return;
-  }
-  //Select one of cards
-  if(!rfid.PICC_ReadCardSerial()){
-    return;
-  }
-
-  tone(PIEZO_PIN, TONE_PITCH, 50);
-
-  MFRC522::PICC_Type piccType = rfid.PICC_GetType(rfid.uid.sak);
-
-  String cardSerial = rfidSerial(rfid.uid.uidByte, rfid.uid.size) + rfid.PICC_GetTypeName(piccType);
-  String cardCredential = SHA256(cardSerial);
-
-  if(WiFi.status() == WL_CONNECTED) {
-    WiFiClient client;
-    HTTPClient http;
-
-    http.begin(client, baseURL + "/attendance");
-    http.addHeader("Content-Type", "application/json");
-    int httpResponseCode = http.POST(createAttendForm(cardCredential));
-
-    if(httpResponseCode > 0) {
-      display.showNumberDec(httpResponseCode);
-      tone(PIEZO_PIN, TONE_PITCH, 50);
-      delay(100);
-      tone(PIEZO_PIN, TONE_PITCH, 50);
-      delay(100);
-      tone(PIEZO_PIN, TONE_PITCH, 50);
-    } else {
-      display.showNumberDec(-httpResponseCode);
-      tone(PIEZO_PIN, TONE_PITCH, 200);
+void writeCharacter(String output, bool logg = true) {
+  if(logg) {
+    for(int i = 0; i < 4; i++) {
+      segData[i] = encodeCharacter(output[i]);
     }
-    http.end();
+    display.setSegments(segData);
   } else {
-    display.showNumberDec(4444);
-    tone(PIEZO_PIN, TONE_PITCH, 200);
+    uint8_t segmentTemp[] = {0x00, 0x00, 0x00, 0x00};
+    for(int i = 0; i < 4; i++) {
+      segmentTemp[i] = encodeCharacter(output[i]);
+    }
+    display.setSegments(segmentTemp);
   }
-  
-  rfid.PICC_HaltA();
-  rfid.PCD_StopCrypto1();
 }
 
 String rfidSerial(byte *buffer, byte bufferSize) {
@@ -302,55 +380,272 @@ String createAttendForm(String cardCredential) {
   
   String form;
   form += "{";
-  form += "\"credential\":" + cardCredential + ",";
-  form += "\"verificationString\":" + verificationString + ",";
-  form += "\"deviceSerial\":" + DEVICE_SERIAL;
-  form += "}";
+  form += "\"credential\":\"" + cardCredential + "\",";
+  form += "\"verificationString\":\"" + verificationString + "\",";
+  form += "\"deviceSerial\":\"" + DEVICE_SERIAL;
+  form += "\"}";
 
   return form;
 }
 
-void updateDate() {
-  if(WiFi.status() == WL_CONNECTED) {
+bool updateInfo() {
+  if(WiFi.status() == WL_CONNECTED) {    
     WiFiClient client;
     HTTPClient http;
 
-    http.begin(client, (baseURL + "/today").c_str());
+    http.begin(client, (baseURL + "/info/today").c_str());
     int httpResponseCode = http.GET();
 
-    if(httpResponseCode > 0) {
+    if(httpResponseCode == 200) {
       date = http.getString();
+      Serial.println(date);
     } else {
-      display.showNumberDec(1026);
-      infiniteErrorBlink();
+      Serial.println("date fail");
+      return false;
     }
     http.end();
+
+    http.begin(client, (baseURL + "/info/securityWord").c_str());
+    httpResponseCode = http.GET();
+    
+    if(httpResponseCode == 200) {
+      securityWord = http.getString();
+      Serial.println(securityWord);
+      return true;
+    } else {
+      Serial.println("securityWord fail");
+      return false;
+    }
+    http.end();
+    
+  } else {
+    return false;
   }
 }
 
-void updateSecurityWord() {
+bool tryUpdateInfo(int times = 0, int delayPhaseCount = 6) {
+  if(times == 0) {
+    while(true) {
+      Serial.println("Try updateInfo");
+      bool success = updateInfo();
+      Serial.println(success);
+      if(success) {
+        Serial.println("updateInfo success");
+        return true;
+      } else {
+        Serial.println("updateInfo fail");
+        Serial.println("RE");
+        for(int j = delayPhaseCount; j > 0; j--) {
+          writeCharacter("ftch");
+          delay(1000);
+          writeCharacter("err");
+          delay(1000);
+          for(int k = 2; k < 5; k++) {
+            writeCharacter("re" + String(j*5-k < 10 ? " " : "") + String(j*5-k));
+            delay(1000);
+          }
+          writeCharacter("try_");
+        }
+      }
+    }
+  } else {
+    bool success = updateInfo();
+    if(success) {
+      return true;
+    } else {
+      for(int i = 0; i < times-1; i++) {
+        for(int j = delayPhaseCount; j > 0; j--) {
+          writeCharacter("sver");
+          delay(1000);
+          writeCharacter("err");
+          delay(1000);
+          for(int k = 2; k < 5; k++) {
+            writeCharacter("re" + String(j*5-k < 10 ? "x" : "") + String(j*5-k));
+            delay(1000);
+          }
+          writeCharacter("try_");
+        }
+        bool success = updateInfo();
+        if(success) {
+          display.setSegments(segData);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+}
+
+void success() {
+  digitalWrite(SUCCESS_LED, HIGH);
+  tone(PIEZO_PIN, TONE_PITCH, 50);
+  delay(50);
+  digitalWrite(SUCCESS_LED, LOW);
+  delay(50);
+  digitalWrite(SUCCESS_LED, HIGH);
+  tone(PIEZO_PIN, TONE_PITCH, 50);
+  delay(50);
+  digitalWrite(SUCCESS_LED, LOW);
+  delay(50);
+  digitalWrite(SUCCESS_LED, HIGH);
+  tone(PIEZO_PIN, TONE_PITCH, 50);
+  segBusy = true;
+  time_now = millis();
+}
+
+void fail() {
+  for(int i = 0; i < 4; i++) {
+    digitalWrite(FAIL_LED, HIGH);
+    tone(PIEZO_PIN, TONE_PITCH, 50);
+    delay(50);
+    digitalWrite(FAIL_LED, LOW);
+    tone(PIEZO_PIN, TONE_PITCH, 50);
+    delay(50);
+  }
+  digitalWrite(FAIL_LED, HIGH);
+  segBusy = true;
+  time_now = millis();
+}
+
+void initStat() {
+  digitalWrite(SUCCESS_LED, LOW);
+  digitalWrite(FAIL_LED, LOW);
+  segBusy = false;
+}
+
+///////////////////////////////////
+//// FUNCTIONS END ////////////////
+///////////////////////////////////
+
+void setup() {
+  pinMode(FAIL_LED, OUTPUT);
+  pinMode(SUCCESS_LED, OUTPUT);
+  digitalWrite(FAIL_LED, LOW);
+  digitalWrite(SUCCESS_LED, LOW);
+  
+  Serial.begin(9600);
+  SPI.begin();
+  rfid.PCD_Init();
+
+  display.setBrightness(0x0a);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PSK);
+
+  segData[0] = encodeCharacter('n');
+  segData[1] = encodeCharacter('e');
+  segData[2] = encodeCharacter('t');
+  segData[3] = 0x00;
+
+  int loadIndex = 0;
+  while (WiFi.status() != WL_CONNECTED) {
+    segData[3] = SEG_LOAD[loadIndex];
+    display.setSegments(segData);
+    delay(100);
+    
+    loadIndex++;
+    if(loadIndex > 3) loadIndex = 0;
+  }
+
+  writeCharacter("init", true);
+  
+  tryUpdateInfo();
+
+  writeCharacter("stby", true);
+}
+
+void loop() {  
+  if(segBusy) {
+    if(millis() - time_now >= SEG_INTERVAL) {
+      time_now = millis();
+
+      initStat();
+      writeCharacter("stby");
+    }
+  }
+  
+  //Look for new cards
+  if(!rfid.PICC_IsNewCardPresent()){
+    return;
+  }
+  //Select one of cards
+  if(!rfid.PICC_ReadCardSerial()){
+    return;
+  }
+
+  initStat();
+  writeCharacter("tagd", true);
+
+  tone(PIEZO_PIN, TONE_PITCH, 50);
+
+  MFRC522::PICC_Type piccType = rfid.PICC_GetType(rfid.uid.sak);
+
+  String cardSerial = rfidSerial(rfid.uid.uidByte, rfid.uid.size) + rfid.PICC_GetTypeName(piccType);
+  String cardCredential = SHA256(cardSerial);
+
+  Serial.println(SHA256(cardSerial));
+
   if(WiFi.status() == WL_CONNECTED) {
     WiFiClient client;
     HTTPClient http;
 
-    http.begin(client, (baseURL + "/securityWord").c_str());
-    int httpResponseCode = http.GET();
-
-    if(httpResponseCode > 0) {
-      securityWord = http.getString();
+    http.begin(client, baseURL + "/attendance");
+    http.addHeader("Content-Type", "application/json");
+    
+    int httpResponseCode = http.POST(createAttendForm(cardCredential));
+    String payload = http.getString();  
+    if(httpResponseCode == 200) {
+      if(payload[0] == '1' || payload[0] == '2' || payload[0] == '3') {
+        writeCharacter(payload);
+        success();
+      } else {
+        if(payload == "E002") {
+          tryUpdateInfo(5, 0);
+  
+          if(WiFi.status() == WL_CONNECTED) {
+            WiFiClient client;
+            HTTPClient http;
+        
+            http.begin(client, baseURL + "/attendance");
+            http.addHeader("Content-Type", "application/json");
+            
+            int httpResponseCode = http.POST(createAttendForm(cardCredential));
+            String payload = http.getString();
+            if(httpResponseCode == 200) {
+              
+              if(payload[0] == '1' || payload[0] == '2' || payload[0] == '3') {
+                writeCharacter(payload);
+                success();
+              } else {
+                writeCharacter(payload);
+                fail();
+              }
+              
+            } else {
+              writeCharacter("E" + String(httpResponseCode));
+              fail();
+            }
+            http.end();
+          } else {
+            writeCharacter("netE");
+            fail();
+          }
+        } else {
+          writeCharacter(payload);
+          fail();
+        }
+        http.end();
+      }
     } else {
-      display.showNumberDec(1026);
-      infiniteErrorBlink();
+      writeCharacter("E" + String(httpResponseCode));
+      fail();
     }
     http.end();
+  } else {
+    writeCharacter("netE");
+    fail();
   }
-}
-
-void infiniteErrorBlink() {
-  while(1) {
-    digitalWrite(ERR_STAT_LED, HIGH);
-    delay(1000);
-    digitalWrite(ERR_STAT_LED, LOW);
-    delay(1000);
-  }
+  
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
 }
